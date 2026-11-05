@@ -1,0 +1,107 @@
+# РЕПОЗИТОРИЙ: actions-playground
+# ЗАПУСК: Actions → See the OIDC claims → Run workflow
+#
+# РЕЗУЛЬТАТ:
+# Workflow показывает сведения о личности, которые GitHub передал бы
+# облачному провайдеру, например AWS.
+#
+# AWS-аккаунт не нужен: мы только ПРОСМАТРИВАЕМ claims
+# и никуда их не отправляем.
+
+name: See the OIDC claims
+
+on: workflow_dispatch
+
+permissions:
+  # Разрешает заданию запросить у GitHub токен идентификации OIDC.
+  id-token: write
+
+  # Обычный доступ к содержимому репозитория только для чтения.
+  contents: read
+
+jobs:
+  from-a-branch:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Show the claims a cloud provider would receive
+        run: |
+          # Благодаря разрешению id-token: write среда выполнения
+          # предоставляет две переменные:
+          #
+          # ACTIONS_ID_TOKEN_REQUEST_URL
+          # ACTIONS_ID_TOKEN_REQUEST_TOKEN
+          #
+          # С их помощью мы запрашиваем у GitHub токен,
+          # аудиторией которого является AWS.
+
+          TOKEN=$(curl -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" |
+            python3 -c "import sys, json; print(json.load(sys.stdin)['value'])")
+
+          export TOKEN
+
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+
+          # Токен состоит из трёх частей, разделённых точками.
+          # Средняя часть содержит claims в формате JSON.
+          payload = os.environ["TOKEN"].split(".")[1]
+
+          # Добавляем padding, необходимый для Base64-декодирования.
+          payload += "=" * (-len(payload) % 4)
+
+          claims = json.loads(base64.urlsafe_b64decode(payload))
+
+          # Выводим только интересующие нас claims.
+          # Сам токен НИКОГДА не выводим.
+          for key in (
+              "iss",
+              "aud",
+              "sub",
+              "repository",
+              "ref",
+              "environment",
+          ):
+              print(f"{key:<12} {claims.get(key)}")
+          PY
+
+  from-an-environment:
+    runs-on: ubuntu-24.04
+
+    # Это задание использует окружение staging.
+    # Посмотрите, как из-за этого изменится claim sub.
+    environment: staging
+
+    steps:
+      - name: Show the claims again, now from a job that uses an environment
+        run: |
+          TOKEN=$(curl -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" |
+            python3 -c "import sys, json; print(json.load(sys.stdin)['value'])")
+
+          export TOKEN
+
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+
+          payload = os.environ["TOKEN"].split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(payload))
+
+          for key in (
+              "iss",
+              "aud",
+              "sub",
+              "repository",
+              "ref",
+              "environment",
+          ):
+              print(f"{key:<12} {claims.get(key)}")
+          PY
